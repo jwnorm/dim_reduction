@@ -1,0 +1,270 @@
+---
+title: "Homework #5: Dimensionality Reduction"
+format:
+  html:
+    embed-resources: true
+editor: visual
+---
+
+**Jacob Norman\
+2024-11-22**
+
+This is the fifth and final assignment for the course *ISE537: Statistical Models for Systems Analytics in Industrial Engineering*. The topic of this assignment is dimensionality reduction. We will investigate **P**rincipal **C**omponents **A**nalysis (PCA) using two different methods:
+
+-   **E**igen **D**ecomposition (ED)
+
+-   **S**ingular **V**alue **D**ecomposition (SVD)
+
+To conclude, these results will be compared against the `R` function `stats::prcomp` to see if there are any differences.
+
+I generally write functions and programs in `Python` and recall not really liking the syntax that `R` uses for this purpose. This assignment will be a great opportunity to get some more practice writing functions in `R`.
+
+## A. Eigen Decomposition
+
+Let's start with creating a function that performs PCA via the ED approach using our linear algebra knowledge. We know that the underlying methodology is not that different from the SVD-based calculation, so let's modularize our code with helper functions to make our lives easier when we move on to the next section.
+
+### Step 0. Read in the Data
+
+First, let's create a simple function that reads in the supplied CSV file as a matrix. In our example, we are dealing with $\tilde{X} \in \mathbb{R}^{20 \times 10}$.
+
+```{r}
+create_matrix <- function(path) {
+  # Reads in file from path as matrix
+  
+  data <- read.csv(path, header = FALSE)
+  X_tilde <- as.matrix(data)
+  colnames(X_tilde) <- NULL
+  
+  return(X_tilde)
+}
+```
+
+### Step 1. Center the Data
+
+Next, we will subtract the mean of each column of $\tilde{X}$ from each element of that respective column to create a new matrix $X$. This is known as *centering* the data.
+
+```{r}
+center_matrix <- function(X_tilde) {
+  # Centers matrix column-wise by subtracting mean
+  
+  X <- scale(X_tilde, center = TRUE, scale = FALSE)
+  
+  return(X)
+}
+```
+
+### Step 2/3. Eigen Decomposition & Projection
+
+We will combine the next two steps into one function by computing the covariance matrix, $C = X^TX$, so we can perform eigen decomposition. We will then use the eigen vectors to project a new matrix, $Z=XU$.
+
+```{r}
+eigen_projection <- function(X) {
+  # Projects a matrix based on eigen decomposition. Returns
+  # projected matrix Z and vector of lambda values.
+  
+  # compute covariance matrix
+  n <- nrow(X)
+  C <- (t(X) %*% X) * (1 / (n - 1))
+  
+  # perform eigen decomposition
+  ed_C <- eigen(C, symmetric = TRUE)
+  lambda <- ed_C$values
+  U <- ed_C$vectors
+  
+  # projection
+  Z <- X %*% U
+  
+  return(list(Z = Z, lambda = lambda))
+}
+```
+
+### Step 4. Determine Optimal Number of Principal Components
+
+For this next step, we need to create a function that will loop through the different values of $\lambda$ and determine the least number of principal components that are needed to meet a given cutoff for **F**raction-of-**V**ariance-**E**xplained (FVE). For this problem, we will use a cutoff value of 90 percent.
+
+```{r}
+determine_opt_pc <- function(lambda, fve_cutoff) {
+  # Loops through all lambda values and determines minimum number
+  # required to meet fraction-of-variance-explained cutoff and 
+  # prints results.
+  
+  var_explained <- 0
+  var_total <- sum(lambda)
+  opt_pc <- 0
+
+  for (l in lambda) {
+    opt_pc <- opt_pc + 1
+    var_explained <- var_explained + l
+    fve <- var_explained / var_total
+
+    if (fve >= fve_cutoff)
+      break
+  }
+    string <- sprintf("There are %d principal components explaining %.2f%% of the variance in the original X matrix.",
+          opt_pc, fve * 100)
+  print(string)
+  return (opt_pc)
+}
+```
+
+### Main Function
+
+Now we will bring it all together in a main function, which we will call `pca_ed`. The only step that we have not covered in a helper function concerns truncation. This creates a new matrix, $\tilde{Z}=Z[, 1:PC^*]$, where $PC^*$ is the minimum number of principal components required to meet our threshold FVE.
+
+```{r}
+pca_ed <- function(path, fve_cutoff = 0.9) {
+  # Main program for performing principal components analysis using eigen
+  # decomposition as computational method. Returns truncated projected
+  # vector Z_tilde, lambda, and prints results of analysis.
+  
+  # Step 0. Read in data
+  X_tilde <- create_matrix(path)
+  
+  # Step 1. Center data
+  X <- center_matrix(X_tilde)
+  
+  # Step 2. Eigen decomposition
+  ed_proj <- eigen_projection(X)
+  lambda <- ed_proj$lambda
+  
+  # Step 3. Projection
+  Z <- ed_proj$Z
+  
+  # Step 4. Determine optimal number of principal components
+  opt_pc <- determine_opt_pc(lambda, fve_cutoff)
+  
+  # Step 5. Truncation
+  Z_tilde <- Z[, 1:opt_pc]
+  
+  return(list(Z_tilde = Z_tilde, lambda = lambda))
+}
+```
+
+With that, let's run our function for the supplied CSV file.
+
+```{r}
+results_ed <- pca_ed("data/Data.csv")
+```
+
+Here are the eigenvalues.
+
+```{r}
+results_ed$lambda
+```
+
+And here is the new projected matrix, $\tilde{Z}$.
+
+```{r}
+results_ed$Z_tilde
+```
+
+## B. Singular Value Decomposition
+
+We will now repeat the same process but for the SVD approach. The good news is that we only need to create one new helper function to achieve this.
+
+### Step 2/3. Singular Value Decomposition & Projection
+
+Using SVD gives us the same result, but the computation is slightly different. For one, we need not compute the covariance matrix and instead perform SVD on $X$ directly. We do need to square the singular values in order to get $\lambda$ and the projection is adjusted to be $Z=XV$.
+
+```{r}
+svd_projection <- function(X) {
+  # Projects a matrix based on singular value decomposition. 
+  # Returns projected matrix Z and vector of lambda values.
+  
+  # perform singular value decomposition
+  svd_X <- svd(X)
+  # need to square singular values to get lambda
+  n <- nrow(X)
+  lambda <- svd_X$d^2 * (1 / (n - 1))
+  V <- svd_X$v
+  
+  # projection
+  Z <- X %*% V
+  
+  return(list(Z = Z, lambda = lambda))
+}
+```
+
+### Main Function
+
+Starting with the `pca_ed` function, we just need to swap out the eigen decomposition logic for SVD to create a new function `pca_svd`.
+
+```{r}
+pca_svd <- function(path, fve_cutoff = 0.9) {
+  # Main program for performing principal components analysis using singular
+  # value decomposition as computational method. Returns truncated projected
+  # vector Z_tilde, lambda, and prints results of analysis.
+  
+  # Step 0. Read in data
+  X_tilde <- create_matrix(path)
+  
+  # Step 1. Center data
+  X <- center_matrix(X_tilde)
+  
+  # Step 2. Singular value decomposition
+  svd_proj <- svd_projection(X)
+  lambda <- svd_proj$lambda
+  
+  # Step 3. Projection
+  Z <- svd_proj$Z
+  
+  # Step 4. Determine optimal number of components
+  opt_pc <- determine_opt_pc(lambda, fve_cutoff)
+  
+  # Step 5. Truncation
+  Z_tilde <- Z[, 1:opt_pc]
+  
+  return(list(Z_tilde = Z_tilde, lambda = lambda))
+}
+```
+
+Now let's run PCA using SVD on the data from the CSV.
+
+```{r}
+results_svd <- pca_svd("data/Data.csv")
+```
+
+We can see that the result is identical to part A. This is no surprise since SVD and eigen decomposition are closely related concepts in linear algebra. Let's investigate the eigenvalues for this method as well.
+
+```{r}
+results_svd$lambda
+```
+
+These look the same as what we observed before. Let's see if the projected matrix, $\tilde{Z}$, does as well.
+
+```{r}
+results_svd$Z_tilde
+```
+
+Sure looks the same to me.
+
+## C. `stats::prcomp`
+
+Now we will compare our homegrown solution against an `R` function `stats::prcomp`. First, we need to read the data from the CSV file into a matrix. Luckily, we have a function to do this for us.
+
+```{r}
+X_tilde <- create_matrix("data/Data.csv")
+```
+
+Let's run the PCA on our raw data and specify that the function should center it.
+
+```{r}
+results_pca <- prcomp(X_tilde, center = TRUE, retx = TRUE)
+summary(results_pca)
+```
+
+We can see that using a threshold of 90 percent for FVE, `stats::prcomp` also selects seven principal components that explain 93.13 percent of the variance in $\tilde{X}$. This means that we have programmed `pca_ed` and `pca_svd` correctly.
+
+To verify further, let's see the eigenvalues for the `stats::prcomp` output.
+
+```{r}
+results_pca$sdev^2 # need to square since method is SVD
+```
+
+Yep, these seem to be the same eigenvalues. What about the projected matrix, $\tilde{Z}$?
+
+```{r}
+results_pca$x[, 1:7]
+```
+
+We can confirm that this is the same $\tilde{Z}$ that we have calculated in the previous sections.
